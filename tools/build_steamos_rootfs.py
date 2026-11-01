@@ -111,19 +111,27 @@ def kde_recipes(output, root):
             + ('prepare() {\n  cd "$pkgname-$pkgver"\n'
                + prepare_commands + '}\n' if patches else '') +
             'build() {\n'
-            '  local opengl_libdir glx_libdir qt_libdir\n'
+            '  local opengl_libdir glx_libdir qt_libdir wayland_libdir component\n'
             '  opengl_libdir=$(pkg-config --variable=libdir opengl)\n'
             '  glx_libdir=$(pkg-config --variable=libdir glx)\n'
             '  test -r "$opengl_libdir/libOpenGL.so"\n'
             '  test -r "$glx_libdir/libGLX.so"\n'
             '  qt_libdir=$(pkg-config --variable=libdir Qt6Core)\n'
             '  test -r "$qt_libdir/cmake/Qt6/qt.toolchain.cmake"\n'
+            '  wayland_libdir=$(pkg-config --variable=libdir wayland-client)\n'
+            '  for component in client server cursor egl; do\n'
+            '    test -r "$wayland_libdir/libwayland-$component.so"\n'
+            '  done\n'
             '  cmake -S "$pkgname-$pkgver" -B build -G Ninja '
             '-DCMAKE_TOOLCHAIN_FILE="$qt_libdir/cmake/Qt6/qt.toolchain.cmake" '
             '-DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr '
             '-DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_INSTALL_LIBEXECDIR=lib '
             '-DOPENGL_opengl_LIBRARY="$opengl_libdir/libOpenGL.so" '
             '-DOPENGL_glx_LIBRARY="$glx_libdir/libGLX.so" '
+            '-DWayland_Client_LIBRARY="$wayland_libdir/libwayland-client.so" '
+            '-DWayland_Server_LIBRARY="$wayland_libdir/libwayland-server.so" '
+            '-DWayland_Cursor_LIBRARY="$wayland_libdir/libwayland-cursor.so" '
+            '-DWayland_Egl_LIBRARY="$wayland_libdir/libwayland-egl.so" '
             '-DBUILD_TESTING=OFF -DBUILD_QCH=OFF\n'
             '  cmake --build build -j4\n}\n'
             'package() {\n  DESTDIR="$pkgdir" cmake --install build\n'
@@ -236,6 +244,17 @@ done
         if subprocess.run(['chroot', root, *opengl_check]).returncode:
             guest(['pacman', '-S', '--noconfirm', 'libglvnd'])
         guest(opengl_check)
+        # Check the actual linker files, not just Wayland's installed version
+        # or .pc metadata, before KDE's CMake dependency scan.
+        wayland_check = ['bash', '-euc', '''
+for component in client server cursor egl; do
+    directory=$(pkg-config --variable=libdir "wayland-$component")
+    test -r "$directory/libwayland-$component.so"
+done
+''']
+        if subprocess.run(['chroot', root, *wayland_check]).returncode:
+            guest(['pacman', '-S', '--noconfirm', 'wayland'])
+        guest(wayland_check)
         if not (root / 'usr/share/ibus/component/pinyin.xml').is_file():
             raise ValueError('The Valve base image must include its native IBus Pinyin engine')
         if subprocess.run(['chroot', root, 'id', 'piano'], capture_output=True).returncode:
